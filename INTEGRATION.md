@@ -125,16 +125,6 @@ Notes:
   in `OAuthConfig`. Change `redirectURI` / `callbackScheme` to your bundle id when
   reusing this in your own app.
 
-### Prerequisite (server side)
-The sample needs these server changes shipped first (tracked in
-**flyfun-weather#274**):
-1. `/.well-known/oauth-authorization-server` served on `weather.flyfun.aero`.
-2. `flights:read` advertised in `scopes_supported` and accepted by `/oauth/authorize`.
-3. `/oauth/register` accepting private-use (native-app) redirect URI schemes.
-
-Until those land, **Connect** will surface the server error (e.g. an
-`invalid redirect_uri` or `invalid_scope` message) instead of completing.
-
 ---
 
 ## Spec references
