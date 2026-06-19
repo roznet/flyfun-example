@@ -127,6 +127,89 @@ Notes:
 
 ---
 
+## Android
+
+The flow is identical — nothing changes server-side. Only two platform pieces
+differ from iOS: **how you open the login page** and **how you catch the
+redirect back**.
+
+| iOS sample | Android equivalent |
+|---|---|
+| `ASWebAuthenticationSession` | **Custom Tabs** (Chrome Custom Tabs) |
+| Private-use URI scheme intercepted automatically | An Activity with an **`intent-filter`** (custom scheme or App Link) |
+| Keychain | **EncryptedSharedPreferences** / Android Keystore |
+| Hand-rolled `FlyFunConnect.swift` | **[AppAuth-Android](https://github.com/openid/AppAuth-Android)** |
+
+### Recommended: AppAuth-Android
+Don't hand-roll it. [AppAuth-Android](https://github.com/openid/AppAuth-Android)
+implements exactly the pieces `FlyFunConnect.swift` does manually — discovery,
+dynamic registration, PKCE, the Custom Tab launch, the redirect, and token
+exchange/refresh.
+
+```kotlin
+// 1. Discovery (RFC 8414)
+AuthorizationServiceConfiguration.fetchFromIssuer(
+    Uri.parse("https://weather.flyfun.aero")
+) { config, ex ->
+    // 2. Dynamic registration (RFC 7591) — do once, then persist client_id/secret
+    val reg = RegistrationRequest.Builder(
+        config!!,
+        listOf(Uri.parse("net.example.yourapp:/oauth-callback"))
+    ).setGrantTypeValues(listOf("authorization_code", "refresh_token"))
+     .setAdditionalParameters(mapOf("client_name" to "Your App (Android)"))
+     .build()
+    // authService.performRegistrationRequest(reg) { resp, e -> save resp.clientId / resp.clientSecret }
+}
+
+// 3. Authorization + PKCE (AppAuth generates the verifier/challenge for you)
+val authRequest = AuthorizationRequest.Builder(
+    config, clientId, ResponseTypeValues.CODE,
+    Uri.parse("net.example.yourapp:/oauth-callback")
+).setScope("flights:read").build()
+startActivityForResult(authService.getAuthorizationRequestIntent(authRequest), RC_AUTH)
+
+// 4. Token exchange — in the redirect Activity's onActivityResult
+val resp = AuthorizationResponse.fromIntent(data)
+authService.performTokenRequest(resp!!.createTokenExchangeRequest()) { tokenResp, ex ->
+    // tokenResp.accessToken / .refreshToken -> store encrypted
+}
+
+// 5. Call the API: Authorization: Bearer <accessToken>
+//    GET /api/flights   and   GET /api/flights/{id}/export
+```
+
+### The redirect (the one Android-specific gotcha)
+You must declare the redirect Activity so the OS routes the callback to your
+app. With AppAuth, set the scheme via a manifest placeholder:
+
+```gradle
+android {
+  defaultConfig {
+    manifestPlaceholders["appAuthRedirectScheme"] = "net.example.yourapp"
+  }
+}
+```
+
+Two choices for the redirect URI (same RFC 8252 trade-off as iOS):
+- **Private-use scheme** (`net.example.yourapp:/oauth-callback`) — simplest,
+  matches the iOS sample, and the server already accepts private-use schemes for
+  registration. Note the Android convention is a single slash (`scheme:/path`).
+- **App Links** (a verified `https://` URL via `assetlinks.json`) — more secure
+  (prevents another app from hijacking the scheme) but requires hosting the
+  verification file. Preferred for production.
+
+### Hand-rolled (no library)
+Everything in `FlyFunConnect.swift` ports directly if you want to avoid
+dependencies the way the iOS sample does:
+- **PKCE** — `MessageDigest.getInstance("SHA-256")` + `Base64.encodeToString(…, URL_SAFE or NO_PADDING or NO_WRAP)`.
+- **Open login** — `CustomTabsIntent.Builder().build().launchUrl(context, authUrl)`.
+- **Catch redirect** — an Activity with the `intent-filter` above, reading
+  `intent.data` for `code` / `state` (verify `state`).
+- **HTTP** — OkHttp or `HttpURLConnection` for `/oauth/token` and `/api/flights`.
+- **Storage** — `EncryptedSharedPreferences`.
+
+---
+
 ## Spec references
 - RFC 8414 — OAuth 2.0 Authorization Server Metadata
 - RFC 7591 — OAuth 2.0 Dynamic Client Registration
